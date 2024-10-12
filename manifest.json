@@ -1,0 +1,11 @@
+{
+    "display_name": "SQLQuery",
+    "loading_order": 900,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "",
+    "author": "ConorNash",
+    "version": "1.0.0",
+    "auto_update": true
+}
