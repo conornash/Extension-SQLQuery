@@ -8,10 +8,30 @@ import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.j
 const locationCache = new Map();
 
 const defaultSettings = {
-    apiKey: '',
-    preferredLocation: '',
-    units: 'metric',
+    host: '',
+    user: '',
+    password: '',
+    database: '',
+    port: '',
 };
+
+async function queryDatabase(query, args) {
+    const client = new Client({
+        host: extension_settings.sqlquery.host,
+        user: extension_settings.sqlquery.user,
+        password: extension_settings.sqlquery.password,
+        database: extension_settings.sqlquery.database,
+        port: extension_settings.sqlquery.port,
+    });
+
+    try {
+        await client.connect();
+        const res = await client.query(query, args);
+        return res.rows;
+    } finally {
+        await client.end();
+    }
+}
 
 async function getWeatherCallback(args, location) {
     if (!extension_settings.sqlquery.apiKey) {
@@ -329,7 +349,7 @@ jQuery(async () => {
                 </div>
                 <div>
                     <label for="sql_port">Port</label>
-                    <input id="sql_port" class="text_pole" type="number" />
+                    <input id="sql_port" class="text_pole" type="text" />
                 </div>
                 <div>
                     <label for="sql_user">User</label>
@@ -348,65 +368,66 @@ jQuery(async () => {
     </div>`;
     $('#extensions_settings2').append(html);
 
-    $('#sql_host').val(extension_settings.sqlDatabase.host).on('input', function() {
-        extension_settings.sqlDatabase.host = String($(this).val());
+    $('#sql_host').val(extension_settings.sqlquery.host).on('input', function() {
+        extension_settings.sqlquery.host = String($(this).val());
         saveSettingsDebounced();
     });
 
-    $('#sql_port').val(extension_settings.sqlDatabase.port).on('input', function() {
-        extension_settings.sqlDatabase.port = String($(this).val());
+    $('#sql_port').val(extension_settings.sqlquery.port).on('input', function() {
+        extension_settings.sqlquery.port = String($(this).val());
         saveSettingsDebounced();
     });
 
-    $('#sql_user').val(extension_settings.sqlDatabase.user).on('input', function() {
-        extension_settings.sqlDatabase.user = String($(this).val());
+    $('#sql_user').val(extension_settings.sqlquery.user).on('input', function() {
+        extension_settings.sqlquery.user = String($(this).val());
         saveSettingsDebounced();
     });
 
-    $('#sql_password').val(extension_settings.sqlDatabase.password).on('input', function() {
-        extension_settings.sqlDatabase.password = String($(this).val());
+    $('#sql_password').val(extension_settings.sqlquery.password).on('input', function() {
+        extension_settings.sqlquery.password = String($(this).val());
         saveSettingsDebounced();
     });
 
-    $('#sql_database').val(extension_settings.sqlDatabase.database).on('input', function() {
-        extension_settings.sqlDatabase.database = String($(this).val());
+    $('#sql_database').val(extension_settings.sqlquery.database).on('input', function() {
+        extension_settings.sqlquery.database = String($(this).val());
         saveSettingsDebounced();
     });
-
     
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'sqlquery',
-        helpString: 'Get the weather forecast for the next 5 days for a location. Uses a preferred location if none is provided.',
+        helpString: 'This is the SQL query to be run',
         unnamedArgumentList: [
             SlashCommandArgument.fromProps({
-                description: 'location to get the weather forecast for',
-                isRequired: false,
+                description: 'Query text',
+                isRequired: true,
                 acceptsMultiple: false,
                 typeList: ARGUMENT_TYPE.STRING,
             }),
         ],
-        namedArgumentList: [
-            SlashCommandNamedArgument.fromProps({
-                name: 'units',
-                description: 'The units to use for the weather data. Uses a preferred unit if none is provided.',
-                typeList: ARGUMENT_TYPE.STRING,
-                isRequired: false,
-                acceptsMultiple: false,
-                enumList: ['metric', 'imperial'],
-            }),
-        ],
-        callback: async function(args) {
-            if (!extension_settings.sqlDatabase.host || !extension_settings.sqlDatabase.user || !extension_settings.sqlDatabase.password || !extension_settings.sqlDatabase.database) {
+        // namedArgumentList: [
+        //     SlashCommandNamedArgument.fromProps({
+        //         name: 'units',
+        //         description: 'The units to use for the weather data. Uses a preferred unit if none is provided.',
+        //         typeList: ARGUMENT_TYPE.STRING,
+        //         isRequired: false,
+        //         acceptsMultiple: false,
+        //         enumList: ['metric', 'imperial'],
+        //     }),
+        // ],
+        callback: async (args) => {
+            if (!extension_settings.sqlquery.host || !extension_settings.sqlquery.user || !extension_settings.sqlquery.password || !extension_settings.sqlquery.database) {
                 throw new Error('Database connection settings are not fully configured.');
             }
 
-            const query = args.unnamed[0];
+            const query = args.unnamed;
             const params = args.args || [];
-            const results = await queryDatabase(query, params);
-            return JSON.stringify(results, null, 2);
+            // const results = await queryDatabase(query, params);
+            // return JSON.stringify(results, null, 2);
+            return "Hello";
         },
         returns: 'a string with the result of the SQL query execution',
     }));
+
 
     registerFunctionTools();
 });
