@@ -7,5 +7,6 @@
     "css": "",
     "author": "ConorNash",
     "version": "1.0.0",
+    "homePage": "https://github.com/conornash/Extension-SQLQuery",
     "auto_update": true
 }

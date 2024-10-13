@@ -6,6 +6,6 @@
   "author": "Conor Nash",
   "license": "ISC",
   "dependencies": {
-    "pg": "^8.5.1"
+    "pg": "^8.13.0"
   }
 }
