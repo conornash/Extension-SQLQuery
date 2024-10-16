@@ -44,6 +44,63 @@ async function queryDatabase(query, args) {
     return data;
 }
 
+async function getAllDefinitions(table_name, args) {
+    const baseUrl = new URL(`http://127.0.0.1:8000/api/plugins/postgresql/sql_query`);
+    const query = `WITH RECURSIVE res AS (
+SELECT DISTINCT
+    *
+  , UNNEST(REGEXP_MATCHES(query_text, '(?:FROM|JOIN) ([a-z0-9_]+)', 'g')) AS contributing_table
+    FROM frc_sql_code
+ WHERE query_name = '${table_name}'
+
+UNION ALL
+
+SELECT DISTINCT
+  fdt.*
+  , UNNEST(REGEXP_MATCHES(fdt.query_text, '(?:FROM|JOIN) ([a-z0-9_]+)', 'g')) AS contributing_table
+FROM res
+LEFT JOIN frc_sql_code fdt
+ON res.contributing_table = fdt.query_name
+
+), contributing_tables AS (
+
+SELECT DISTINCT res.query_name
+, t.*
+FROM res
+LEFT JOIN information_schema.tables t
+ON res.query_name = t.table_name
+WHERE t.table_schema IN ('nbs_precalc', 'qdc')
+)
+
+SELECT fsc.*
+FROM contributing_tables ct
+JOIN frc_sql_code fsc
+ON ct.query_name = fsc.query_name
+where fsc.query_name NOT IN ('frc__document_template_list_item');
+`;
+    const requestOptions = {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ query: query })
+    };
+
+    const response = await fetch(baseUrl, requestOptions);
+
+    if (!response.ok) {
+        throw new Error(`Failed to get query`);
+    }
+
+    const data = await response.json();
+
+    if (!data || typeof data !== 'object') {
+        throw new Error(`No result set`);
+    }
+
+    return data;
+}
+
 function registerFunctionTools() {
     try {
         const { registerFunctionTool } = SillyTavern.getContext();
@@ -174,11 +231,11 @@ jQuery(async () => {
         unnamedArgumentList: [
             SlashCommandArgument.fromProps({
                 description: 'Query text',
-                isRequired: true,                
+                isRequired: true,
                 typeList: ARGUMENT_TYPE.STRING,
             }),
         ],
-        callback: async (args, value) => {            
+        callback: async (args, value) => {
             const query = value;
             console.log(MODULE_NAME, query);
             const params = args.args || [];
@@ -188,6 +245,26 @@ jQuery(async () => {
         returns: 'a JSON with the result of the SQL query execution',
     }));
 
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'get-sql-definitions',
+        helpString: 'Get definitions for all code contributing towards generating the named table.',
+        unnamedArgumentList: [
+            SlashCommandArgument.fromProps({
+                description: 'Table name',
+                isRequired: true,
+                typeList: ARGUMENT_TYPE.STRING,
+            }),
+        ],
+        callback: async (args, value) => {
+            const table_name = value;
+            console.log(MODULE_NAME, table_name);
+            const params = args.args || [];
+            const results = await getAllDefinitions(table_name, params);
+            const newres = results.map(elem => "###" + elem.query_name + "\n\n```sql\n" + elem.query_text.replace(/\n\n/g, '\n') + "```\n\n");
+            return newres.join('\n');
+        },
+        returns: 'a JSON with all code used to generate the requested table',
+    }));
 
     registerFunctionTools();
 });
