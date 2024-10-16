@@ -20,7 +20,6 @@ console.warn("Warning");
 console.error("Error");
 
 async function queryDatabase(query, args) {
-    const baseUrl = new URL(`http://127.0.0.1:8000/api/plugins/postgresql/sql_query`);
     const requestOptions = {
         method: 'POST',
         headers: {
@@ -29,7 +28,7 @@ async function queryDatabase(query, args) {
         body: JSON.stringify({ query: query })
     };
 
-    const response = await fetch(baseUrl, requestOptions);
+    const response = await fetch('/api/plugins/postgresql/sql_query', requestOptions);
 
     if (!response.ok) {
         throw new Error(`Failed to get query`);
@@ -45,7 +44,6 @@ async function queryDatabase(query, args) {
 }
 
 async function getAllDefinitions(table_name, args) {
-    const baseUrl = new URL(`http://127.0.0.1:8000/api/plugins/postgresql/sql_query`);
     const query = `WITH RECURSIVE res AS (
 SELECT DISTINCT
     *
@@ -86,7 +84,7 @@ where fsc.query_name NOT IN ('frc__document_template_list_item');
         body: JSON.stringify({ query: query })
     };
 
-    const response = await fetch(baseUrl, requestOptions);
+    const response = await fetch('/api/plugins/postgresql/sql_query', requestOptions);
 
     if (!response.ok) {
         throw new Error(`Failed to get query`);
