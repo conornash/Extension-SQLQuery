@@ -260,7 +260,7 @@ jQuery(async () => {
             console.log(MODULE_NAME, table_name);
             const params = args.args || [];
             const results = await getAllDefinitions(table_name, params);
-            const newres = results.map(elem => "###" + elem.query_name + "\n\n```sql\n" + elem.query_text.replace(/\n\n/g, '\n') + "```\n\n");
+            const newres = results.map(elem => "###" + elem.query_name + "\n\n```sql\n" + elem.query_text.replace(/\n\n/g, '\n').split("INSERT INTO")[0].trim() + "\n\n```\n\n");
             return newres.join('\n');
         },
         returns: 'a JSON with all code used to generate the requested table',
