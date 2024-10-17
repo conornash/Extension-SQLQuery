@@ -43,10 +43,15 @@ async function queryDatabase(query, args) {
     return data;
 }
 
-async function getAllDefinitions(table_name, args) {
+async function getTableDefinitions(table_name, args) {
+    const query_depth = args.query_depth || 10;
     const query = `WITH RECURSIVE res AS (
 SELECT DISTINCT
-    *
+id
+, 0 AS query_depth
+,   NULL AS prior_relation
+,    query_name
+,    query_text
   , UNNEST(REGEXP_MATCHES(query_text, '(?:FROM|JOIN) ([a-z0-9_]+)', 'g')) AS contributing_table
     FROM frc_sql_code
  WHERE query_name = '${table_name}'
@@ -54,27 +59,30 @@ SELECT DISTINCT
 UNION ALL
 
 SELECT DISTINCT
-  fdt.*
-  , UNNEST(REGEXP_MATCHES(fdt.query_text, '(?:FROM|JOIN) ([a-z0-9_]+)', 'g')) AS contributing_table
+fsc.id
+, res.query_depth + 1 AS query_depth
+, res.query_name AS prior_relation
+, fsc.query_name
+, fsc.query_text
+ , UNNEST(REGEXP_MATCHES(fsc.query_text, '(?:FROM|JOIN) ([a-z0-9_]+)', 'g')) AS contributing_table
 FROM res
-LEFT JOIN frc_sql_code fdt
-ON res.contributing_table = fdt.query_name
+JOIN frc_sql_code fsc
+ON res.contributing_table = fsc.query_name
+AND res.query_name != fsc.query_name
 
-), contributing_tables AS (
-
-SELECT DISTINCT res.query_name
-, t.*
-FROM res
-LEFT JOIN information_schema.tables t
-ON res.query_name = t.table_name
-WHERE t.table_schema IN ('nbs_precalc', 'qdc')
 )
 
-SELECT fsc.*
-FROM contributing_tables ct
-JOIN frc_sql_code fsc
-ON ct.query_name = fsc.query_name
-where fsc.query_name NOT IN ('frc__document_template_list_item');
+SELECT DISTINCT
+res.query_name
+, res.query_text
+FROM res
+    JOIN information_schema.tables t
+ON res.contributing_table = t.table_name
+WHERE t.table_schema IN ('nbs_precalc', 'qdc')
+AND query_name NOT LIKE 'rpt__%'
+AND query_name NOT LIKE '%_docmodel_%'
+AND query_depth <= ${query_depth}
+LIMIT 100;
 `;
     const requestOptions = {
         method: 'POST',
@@ -253,11 +261,18 @@ jQuery(async () => {
                 typeList: ARGUMENT_TYPE.STRING,
             }),
         ],
+        namedArgumentList: [
+        SlashCommandNamedArgument.fromProps({ name: 'query_depth',
+            description: 'How deep down the hierarchy the query will go.',
+            typeList: [ARGUMENT_TYPE.NUMBER],
+            defaultValue: '10',
+            isRequired: true,
+        })
+        ],
         callback: async (args, value) => {
             const table_name = value;
             console.log(MODULE_NAME, table_name);
-            const params = args.args || [];
-            const results = await getAllDefinitions(table_name, params);
+            const results = await getTableDefinitions(table_name, args);
             const newres = results.map(elem => "###" + elem.query_name + "\n\n```sql\n" + elem.query_text.replace(/\n\n/g, '\n').split("INSERT INTO")[0].trim() + "\n\n```\n\n");
             return newres.join('\n');
         },
