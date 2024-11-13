@@ -91,8 +91,7 @@ async function findCandidateTableNames(measure_search_term, report_search_term) 
 , query_source
 FROM frc_sql_code
 WHERE query_text @@ plainto_tsquery('${measure_search_term}')
-AND query_name @@ plainto_tsquery('${report_search_term}')
-;
+AND query_name @@ plainto_tsquery('${report_search_term}');
 `;
     return queryDatabase(query);
 }
@@ -164,6 +163,36 @@ function registerFunctionTools() {
                 return results;
             },
             formatMessage: (args) => args?.query ? `Retrieving SQL table definition...` : '',
+        });
+
+        const findCandidateTableNamesSchema = Object.freeze({
+            $schema: 'http://json-schema.org/draft-04/schema#',
+            type: 'object',
+            properties: {
+                measure_search_term: {
+                    type: 'string',
+                    description: 'A whole or partial name of a measure for which the table name to which it belongs is sought.',
+                },
+                report_search_term: {
+                    type: 'string',
+                    description: 'A whole or partial name of the report to which the measure belongs.',
+                },
+            },
+            required: ['measure_search_term', 'report_search_term'],
+        });
+
+        registerFunctionTool({
+            name: 'findCandidateTableNames',
+            displayName: 'Find Candidate Tables related to Measure and Report search terms',
+            description: 'Given a search term for a measure and a report, this will return a list of potential tables in the database, along with whether they are constructed in Airflow or Retool.',
+            parameters: findCandidateTableNamesSchema,
+            action: async (args) => {
+                const measure_search_term = args.measure_search_term;
+                const report_search_term = args.report_search_term;
+                const results = await findCandidateTableNames(measure_search_term, report_search_term);
+                return results;
+            },
+            formatMessage: (args) => `Searching for tables that may contain ${args.measure_search_term} within a table responsible for ${args.report_search_term}...`,
         });
 
     } catch (err) {
