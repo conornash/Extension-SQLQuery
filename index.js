@@ -19,52 +19,27 @@ console.info("Info");
 console.warn("Warning");
 console.error("Error");
 
-async function queryDatabase(query, args) {
-    const requestOptions = {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ query: query })
-    };
-
-    const response = await fetch('/api/plugins/postgresql/sql_query', requestOptions);
-
-    if (!response.ok) {
-        throw new Error(`Failed to get query`);
-    }
-
-    const data = await response.json();
-
-    if (!data || typeof data !== 'object') {
-        throw new Error(`No result set`);
-    }
-
-    return data;
-}
-
-async function getTableDefinitions(table_name, args) {
-    const query_depth = args.query_depth || 10;
-    const query = `WITH RECURSIVE res AS (
+function sqlSourceFunctionTemplate(table_name, query_depth) {
+    return `WITH RECURSIVE res AS (
 SELECT DISTINCT
-id
-, 0 AS query_depth
+0 AS query_depth
 ,   NULL AS prior_relation
 ,    query_name
 ,    query_text
-  , UNNEST(REGEXP_MATCHES(query_text, '(?:FROM|JOIN) ([a-z0-9_]+)', 'g')) AS contributing_table
+, query_source
+  , UNNEST(query_relations) AS contributing_table
     FROM frc_sql_code
  WHERE query_name = '${table_name}'
 
 UNION ALL
 
 SELECT DISTINCT
-fsc.id
-, res.query_depth + 1 AS query_depth
+res.query_depth + 1 AS query_depth
 , res.query_name AS prior_relation
 , fsc.query_name
 , fsc.query_text
- , UNNEST(REGEXP_MATCHES(fsc.query_text, '(?:FROM|JOIN) ([a-z0-9_]+)', 'g')) AS contributing_table
+, fsc.query_source
+ , UNNEST(query_relations) AS contributing_table
 FROM res
 JOIN frc_sql_code fsc
 ON res.contributing_table = fsc.query_name
@@ -79,11 +54,16 @@ FROM res
     JOIN information_schema.tables t
 ON res.contributing_table = t.table_name
 WHERE t.table_schema IN ('nbs_precalc', 'qdc')
+AND query_source = 'Airflow'
 AND query_name NOT LIKE 'rpt__%'
 AND query_name NOT LIKE '%_docmodel_%'
+AND query_name NOT LIKE '%permissions'
 AND query_depth <= ${query_depth}
 LIMIT 100;
 `;
+}
+
+async function queryDatabase(query) {
     const requestOptions = {
         method: 'POST',
         headers: {
@@ -93,19 +73,23 @@ LIMIT 100;
     };
 
     const response = await fetch('/api/plugins/postgresql/sql_query', requestOptions);
-
     if (!response.ok) {
         throw new Error(`Failed to get query`);
     }
 
     const data = await response.json();
-
     if (!data || typeof data !== 'object') {
         throw new Error(`No result set`);
     }
 
     return data;
 }
+
+async function getTableSQLSourceCode(table_name, query_depth) {
+    const query = sqlSourceFunctionTemplate(table_name, query_depth);
+    return queryDatabase(query);
+}
+
 
 function registerFunctionTools() {
     try {
@@ -147,6 +131,34 @@ function registerFunctionTools() {
             },
             formatMessage: (args) => args?.query ? `Executing SQL query...` : '',
         });
+
+        const sqlTableDDLSchema = Object.freeze({
+            $schema: 'http://json-schema.org/draft-04/schema#',
+            type: 'object',
+            properties: {
+                table_name: {
+                    type: 'string',
+                    description: 'The SQL Table for which the source code is sought.',
+                },
+            },
+            required: ['table_name'],
+        });
+
+        registerFunctionTool({
+            name: 'GetSQLTableDDL',
+            displayName: 'Get SQL Table DDL',
+            description: 'Given a SQL Table name, return the `CREATE TABLE AS` DDL used to generate the data stored in that table.',
+            parameters: sqlTableDDLSchema,
+            action: async (args) => {
+                if (!args) throw new Error('No arguments provided');
+                const table_name = args.table_name;
+                const query_depth =  args.query_depth ?? '1';
+                const results = await getTableSQLSourceCode(table_name, query_depth);
+                return results;
+            },
+            formatMessage: (args) => args?.query ? `Retrieving SQL table definition...` : '',
+        });
+
     } catch (err) {
         console.error('SQL Database function tools failed to register:', err);
     }
@@ -265,14 +277,14 @@ jQuery(async () => {
         SlashCommandNamedArgument.fromProps({ name: 'query_depth',
             description: 'How deep down the hierarchy the query will go.',
             typeList: [ARGUMENT_TYPE.NUMBER],
-            defaultValue: '10',
-            isRequired: true,
+            defaultValue: '1'
         })
         ],
         callback: async (args, value) => {
             const table_name = value;
             console.log(MODULE_NAME, table_name);
-            const results = await getTableDefinitions(table_name, args);
+            const query_depth = args.query_depth ?? '1';
+            const results = await getTableSQLSourceCode(table_name, query_depth);
             const newres = results.map(elem => "###" + elem.query_name + "\n\n```sql\n" + elem.query_text.replace(/\n\n/g, '\n').split("INSERT INTO")[0].trim() + "\n\n```\n\n");
             return newres.join('\n');
         },
