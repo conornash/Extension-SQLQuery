@@ -44,22 +44,18 @@ FROM res
 JOIN frc_sql_code fsc
 ON res.contributing_table = fsc.query_name
 AND res.query_name != fsc.query_name
-
+WHERE fsc.query_source = 'Airflow'
+AND fsc.query_name NOT LIKE 'rpt__%'
+AND fsc.query_name NOT LIKE '%_docmodel_%'
+AND fsc.query_name NOT LIKE '%permissions'
+AND res.query_depth < ${query_depth}
 )
 
 SELECT DISTINCT
 res.query_name
 , res.query_text
 FROM res
-    JOIN information_schema.tables t
-ON res.contributing_table = t.table_name
-WHERE t.table_schema IN ('nbs_precalc', 'qdc')
-AND query_source = 'Airflow'
-AND query_name NOT LIKE 'rpt__%'
-AND query_name NOT LIKE '%_docmodel_%'
-AND query_name NOT LIKE '%permissions'
-AND query_depth <= ${query_depth}
-LIMIT 100;
+LIMIT 10;
 `;
 }
 
@@ -87,6 +83,17 @@ async function queryDatabase(query) {
 
 async function getTableSQLSourceCode(table_name, query_depth) {
     const query = sqlSourceFunctionTemplate(table_name, query_depth);
+    return queryDatabase(query);
+}
+
+async function findCandidateTableNames(measure_search_term, report_search_term) {
+    const query = `SELECT query_name
+, query_source
+FROM frc_sql_code
+WHERE query_text @@ plainto_tsquery('${measure_search_term}')
+AND query_name @@ plainto_tsquery('${report_search_term}')
+;
+`;
     return queryDatabase(query);
 }
 
@@ -289,6 +296,32 @@ jQuery(async () => {
             return newres.join('\n');
         },
         returns: 'a JSON with all code used to generate the requested table',
+    }));
+
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'find-candidate-table-names',
+        helpString: 'Given a search term for a measure and a report, this will return a list of potential tables in the database, along with whether they are constructed in Airflow or Retool.',
+        namedArgumentList: [
+            SlashCommandNamedArgument.fromProps({
+                name: 'measure_search_term',
+                description: 'A whole or partial name of a measure for which the table name to which it belongs is sought.',
+                isRequired: true,
+                typeList: [ARGUMENT_TYPE.STRING],
+            }),
+            SlashCommandNamedArgument.fromProps({
+                name: 'report_search_term',
+                description: 'A whole or partial name of the report to which the measure belongs.',
+                isRequired: true,
+                typeList: [ARGUMENT_TYPE.STRING],
+            }),
+        ],
+        callback: async (args, value) => {
+            const measure_search_term = args.measure_search_term;
+            const report_search_term = args.report_search_term;
+            const results = await findCandidateTableNames(measure_search_term, report_search_term);
+            return JSON.stringify(results, null, 2);
+        },
+        returns: 'a JSON with the result of the SQL query execution',
     }));
 
     registerFunctionTools();
