@@ -19,10 +19,10 @@ console.info("Info");
 console.warn("Warning");
 console.error("Error");
 
-function sqlSourceFunctionTemplate(table_name, query_depth) {
+function sqlSourceFunctionTemplate(table_name, recursive_depth) {
     return `WITH RECURSIVE res AS (
 SELECT DISTINCT
-0 AS query_depth
+0 AS recursive_depth
 ,   NULL AS prior_relation
 ,    query_name
 ,    query_text
@@ -34,7 +34,7 @@ SELECT DISTINCT
 UNION ALL
 
 SELECT DISTINCT
-res.query_depth + 1 AS query_depth
+res.recursive_depth + 1 AS recursive_depth
 , res.query_name AS prior_relation
 , fsc.query_name
 , fsc.query_text
@@ -48,7 +48,7 @@ WHERE fsc.query_source = 'Airflow'
 AND fsc.query_name NOT LIKE 'rpt__%'
 AND fsc.query_name NOT LIKE '%_docmodel_%'
 AND fsc.query_name NOT LIKE '%permissions'
-AND res.query_depth < ${query_depth}
+AND res.recursive_depth < ${recursive_depth}
 )
 
 SELECT DISTINCT
@@ -81,8 +81,8 @@ async function queryDatabase(query) {
     return data;
 }
 
-async function getTableSQLSourceCode(table_name, query_depth) {
-    const query = sqlSourceFunctionTemplate(table_name, query_depth);
+async function getCreateTableAsDefinitions(table_name, recursive_depth) {
+    const query = sqlSourceFunctionTemplate(table_name, recursive_depth);
     return queryDatabase(query);
 }
 
@@ -144,22 +144,26 @@ function registerFunctionTools() {
             properties: {
                 table_name: {
                     type: 'string',
-                    description: 'The SQL Table for which the source code is sought.',
+                    description: 'The SQL table for which the source code is sought.',
                 },
+                recursive_depth: {
+                    type: 'string',
+                    description: 'This is the number of levels of provenance to pull the CREATE TABLE AS definition. If the value is 2, it will pull the DDL of the original table, parent tables, and grandparent tables. If the value is 0, it will pull the DDL of the original table only. The default value is 1.',
+                }
             },
             required: ['table_name'],
         });
 
         registerFunctionTool({
-            name: 'GetSQLTableDDL',
-            displayName: 'Get SQL Table DDL',
-            description: 'Given a SQL Table name, return the `CREATE TABLE AS` DDL used to generate the data stored in that table.',
+            name: 'getSQLTableDDLRecursively',
+            displayName: 'Retrieve the definition for the table of interest and ancestor tables',
+            description: 'Given a SQL Table name, return the `CREATE TABLE AS` DDL used to generate the data stored in that table along with ancestor tables up to `recursive_depth` levels of provenance.',
             parameters: sqlTableDDLSchema,
             action: async (args) => {
                 if (!args) throw new Error('No arguments provided');
                 const table_name = args.table_name;
-                const query_depth =  args.query_depth ?? '1';
-                const results = await getTableSQLSourceCode(table_name, query_depth);
+                const recursive_depth =  args.recursive_depth ?? '1';
+                const results = await getCreateTableAsDefinitions(table_name, recursive_depth);
                 return results;
             },
             formatMessage: (args) => args?.query ? `Retrieving SQL table definition...` : '',
@@ -304,14 +308,14 @@ jQuery(async () => {
         helpString: 'Get definitions for all code contributing towards generating the named table.',
         unnamedArgumentList: [
             SlashCommandArgument.fromProps({
-                description: 'Table name',
+                description: 'This is the name of the table for which the definition is sought.',
                 isRequired: true,
                 typeList: ARGUMENT_TYPE.STRING,
             }),
         ],
         namedArgumentList: [
-        SlashCommandNamedArgument.fromProps({ name: 'query_depth',
-            description: 'How deep down the hierarchy the query will go.',
+        SlashCommandNamedArgument.fromProps({ name: 'recursive_depth',
+                                              description: 'This is the number of levels of provenance to pull the CREATE TABLE AS definition. If the value is 2, it will pull the DDL of the original table, parent tables, and grandparent tables. If the value is 0, it will pull the DDL of the original table only. The default value is 1.',
             typeList: [ARGUMENT_TYPE.NUMBER],
             defaultValue: '1'
         })
@@ -319,8 +323,8 @@ jQuery(async () => {
         callback: async (args, value) => {
             const table_name = value;
             console.log(MODULE_NAME, table_name);
-            const query_depth = args.query_depth ?? '1';
-            const results = await getTableSQLSourceCode(table_name, query_depth);
+            const recursive_depth = args.recursive_depth ?? '1';
+            const results = await getCreateTableAsDefinitions(table_name, recursive_depth);
             const newres = results.map(elem => "###" + elem.query_name + "\n\n```sql\n" + elem.query_text.replace(/\n\n/g, '\n').split("INSERT INTO")[0].trim() + "\n\n```\n\n");
             return newres.join('\n');
         },
