@@ -171,11 +171,11 @@ function registerFunctionTools() {
             properties: {
                 measure_search_term: {
                     type: 'string',
-                    description: 'A whole or partial name of a measure for which the table name to which it belongs is sought.',
+                    description: 'A whole or partial name of a measure for which the table name to which it belongs is sought. Cannot be empty',
                 },
                 report_search_term: {
                     type: 'string',
-                    description: 'A whole or partial name of the report to which the measure belongs.',
+                    description: 'A whole or partial name of the report to which the measure belongs. Cannot be empty.',
                 },
             },
             required: ['measure_search_term', 'report_search_term'],
@@ -184,7 +184,7 @@ function registerFunctionTools() {
         registerFunctionTool({
             name: 'findCandidateTableNames',
             displayName: 'Find Candidate Tables related to Measure and Report search terms',
-            description: 'Given a search term for a measure and a report, this will return a list of potential tables in the database, along with whether they are constructed in Airflow or Retool.',
+            description: 'Given a search term for a measure and a report, this will return a list of potential tables in the database, along with whether they are constructed in Airflow or Retool. If only one argument is provided, or an empty string is given for one argument, this will return an empty result.',
             parameters: findCandidateTableNamesSchema,
             action: async (args) => {
                 const measure_search_term = args.measure_search_term;
