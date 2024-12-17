@@ -47,6 +47,7 @@ AND res.query_name != fsc.query_name
 WHERE fsc.query_source = 'Airflow'
 AND fsc.query_name NOT LIKE 'rpt__%'
 AND fsc.query_name NOT LIKE '%_docmodel_%'
+AND fsc.query_name NOT LIKE 'f%'
 AND fsc.query_name NOT LIKE '%permissions'
 AND res.recursive_depth < ${recursive_depth}
 )
@@ -90,12 +91,33 @@ async function findCandidateTableNames(measure_search_term, report_search_term) 
     const query = `SELECT query_name
 , query_source
 FROM frc_sql_code
-WHERE query_text @@ plainto_tsquery('${measure_search_term}')
-AND query_name @@ plainto_tsquery('${report_search_term}');
+WHERE query_text @@ websearch_to_tsquery('${measure_search_term}')
+AND query_name @@ websearch_to_tsquery('${report_search_term}');
 `;
     return queryDatabase(query);
 }
 
+async function getAzureBlobUrl(blobName) {
+    const requestOptions = {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ blobName: blobName })
+    };
+    const response = await fetch('/api/plugins/postgresql/get_blob_url', requestOptions);
+    if (!response.ok) {
+        throw new Error(`Failed to get query`);
+    }
+
+    const data = await response.json();
+    if (!data || typeof data !== 'object') {
+        throw new Error(`No result set`);
+    }
+
+    return data;
+
+}
 
 function registerFunctionTools() {
     try {
@@ -105,6 +127,32 @@ function registerFunctionTools() {
             console.debug('[SQL Database] Tool calling is not supported.');
             return;
         }
+
+        const getAzureBlobUrlSchema = Object.freeze({
+            $schema: 'http://json-schema.org/draft-04/schema#',
+            type: 'object',
+            properties: {
+                blobName: {
+                    type: 'string',
+                    description: 'The blob prefix at which the file is located.',
+                },
+            },
+            required: ['blobName'],
+        });
+
+        registerFunctionTool({
+            name: 'getAzureBlobUrl',
+            displayName: 'Get Azure Blob URL',
+            description: 'Given a blob prefix, return an SAS secured URL that allows the file at that blob to be downloaded. The container is hard-coded and cannot be changed.',
+            parameters: getAzureBlobUrlSchema,
+            action: async (args) => {
+                if (!args) throw new Error('No arguments provided');
+                const blobName = args.blobName;
+                const results = await getAzureBlobUrl(blobName);
+                return results.blob_url;
+            },
+            formatMessage: (args) => args?.query ? `Executing SQL query...` : '',
+        });
 
         const sqlQuerySchema = Object.freeze({
             $schema: 'http://json-schema.org/draft-04/schema#',
@@ -188,7 +236,7 @@ function registerFunctionTools() {
         registerFunctionTool({
             name: 'findCandidateTableNames',
             displayName: 'Find Candidate Tables related to Measure and Report search terms',
-            description: 'Given a search term for a measure and a report, this will return a list of potential tables in the database, along with whether they are constructed in Airflow or Retool. If only one argument is provided, or an empty string is given for one argument, this will return an empty result.',
+            description: 'Given a search term for both a measure and a report, this will return a list of potential source tables along with whether they are constructed in Airflow or Retool. Both search terms are parsed using the PostgreSQL function `websearch_to_tsquery`. If only one argument is provided, or an empty string is given for one argument, this will return an empty result.',
             parameters: findCandidateTableNamesSchema,
             action: async (args) => {
                 const measure_search_term = args.measure_search_term;
@@ -282,6 +330,25 @@ jQuery(async () => {
         extension_settings.sqlquery.database = String($(this).val());
         saveSettingsDebounced();
     });
+
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'get-blob-url',
+        helpString: 'This is the blob prefix',
+        unnamedArgumentList: [
+            SlashCommandArgument.fromProps({
+                description: 'Blob name',
+                isRequired: true,
+                typeList: ARGUMENT_TYPE.STRING,
+            }),
+        ],
+        callback: async (args, value) => {
+            const blobName = value;
+            console.log(MODULE_NAME, blobName);
+            const results = await getAzureBlobUrl(blobName);
+            return JSON.stringify(results.blob_url, null, 2);
+        },
+        returns: 'The URL of a signed Azure Blob',
+    }));
 
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'sqlquery',
