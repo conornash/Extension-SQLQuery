@@ -19,8 +19,62 @@ console.info("Info");
 console.warn("Warning");
 console.error("Error");
 
-function sqlSourceFunctionTemplate(table_name, recursive_depth) {
-    return `WITH RECURSIVE res AS (
+async function queryShannonDatabase(query) {
+    const requestOptions = {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ query: query })
+    };
+
+    const response = await fetch('/api/plugins/postgresql/shannon_sql_query', requestOptions);
+    if (!response.ok) {
+        throw new Error(`Failed to get query`);
+    }
+
+    const data = await response.json();
+    if (!data || typeof data !== 'object') {
+        throw new Error(`No result set`);
+    }
+
+    return data;
+}
+
+async function queryTolkaDatabase(query) {
+    const requestOptions = {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ query: query })
+    };
+
+    const response = await fetch('/api/plugins/postgresql/tolka_sql_query', requestOptions);
+    if (!response.ok) {
+        throw new Error(`Failed to get query`);
+    }
+
+    const data = await response.json();
+    if (!data || typeof data !== 'object') {
+        throw new Error(`No result set`);
+    }
+
+    return data;
+}
+
+async function findCandidateTableNames(measure_search_term, report_search_term) {
+    const query = `SELECT query_name
+, query_source
+FROM frc_sql_code
+WHERE query_text @@ websearch_to_tsquery('${measure_search_term}')
+AND query_name @@ websearch_to_tsquery('${report_search_term}');
+`;
+    return queryShannonDatabase(query);
+}
+
+async function getCreateTableAsDefinitions(table_name, recursive_depth) {
+    const query = `WITH RECURSIVE res AS (
 SELECT DISTINCT
 0 AS recursive_depth
 ,   NULL AS prior_relation
@@ -58,43 +112,20 @@ res.query_name
 FROM res
 LIMIT 10;
 `;
+    return queryShannonDatabase(query);
 }
 
-async function queryDatabase(query) {
-    const requestOptions = {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ query: query })
-    };
-
-    const response = await fetch('/api/plugins/postgresql/sql_query', requestOptions);
-    if (!response.ok) {
-        throw new Error(`Failed to get query`);
-    }
-
-    const data = await response.json();
-    if (!data || typeof data !== 'object') {
-        throw new Error(`No result set`);
-    }
-
-    return data;
-}
-
-async function getCreateTableAsDefinitions(table_name, recursive_depth) {
-    const query = sqlSourceFunctionTemplate(table_name, recursive_depth);
-    return queryDatabase(query);
-}
-
-async function findCandidateTableNames(measure_search_term, report_search_term) {
-    const query = `SELECT query_name
-, query_source
-FROM frc_sql_code
-WHERE query_text @@ websearch_to_tsquery('${measure_search_term}')
-AND query_name @@ websearch_to_tsquery('${report_search_term}');
+function putTableIntoBlobStorage(table_name) {
+    const filename = "";
+    const query = `
+SELECT azure_storage.blob_put
+        ('nbsetl'
+        ,'sql-output'
+        ,'${filename}'
+        , res)
+FROM (SELECT * FROM ${table_name}) AS res;
 `;
-    return queryDatabase(query);
+    return queryTolkaDatabase(query);
 }
 
 async function getAzureBlobUrl(blobName) {
@@ -116,7 +147,6 @@ async function getAzureBlobUrl(blobName) {
     }
 
     return data;
-
 }
 
 function registerFunctionTools() {
@@ -180,7 +210,7 @@ function registerFunctionTools() {
                 if (!args) throw new Error('No arguments provided');
                 const query = args.query;
                 const params = args.args || [];
-                const results = await queryDatabase(query, params);
+                const results = await queryShannonDatabase(query, params);
                 return results;
             },
             formatMessage: (args) => args?.query ? `Executing SQL query...` : '',
@@ -364,7 +394,7 @@ jQuery(async () => {
             const query = value;
             console.log(MODULE_NAME, query);
             const params = args.args || [];
-            const results = await queryDatabase(query, params);
+            const results = await queryShannonDatabase(query, params);
             return JSON.stringify(results, null, 2);
         },
         returns: 'a JSON with the result of the SQL query execution',
