@@ -41,32 +41,6 @@ async function queryDatabase(db_name, query) {
     return data;
 }
 
-async function queryShannonDatabase(query) {
-    return queryDatabase("shannon", query);
-}
-
-async function queryTolkaDatabase(query) {
-    const requestOptions = {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ query: query })
-    };
-
-    const response = await fetch('/api/plugins/postgresql/tolka_sql_query', requestOptions);
-    if (!response.ok) {
-        throw new Error(`Failed to get query`);
-    }
-
-    const data = await response.json();
-    if (!data || typeof data !== 'object') {
-        throw new Error(`No result set`);
-    }
-
-    return data;
-}
-
 async function findCandidateTableNames(measure_search_term, report_search_term) {
     const query = `SELECT query_name
 , query_source
@@ -74,7 +48,7 @@ FROM frc_sql_code
 WHERE query_text @@ websearch_to_tsquery('${measure_search_term}')
 AND query_name @@ websearch_to_tsquery('${report_search_term}');
 `;
-    return queryShannonDatabase(query);
+    return queryDatabase("shannon", query);
 }
 
 async function logSillyTavernConversation(conversation_name, messages) {
@@ -134,7 +108,7 @@ res.query_name
 FROM res
 LIMIT 10;
 `;
-    return queryShannonDatabase(query);
+    return queryDatabase("shannon", query);
 }
 
 function putTableIntoBlobStorage(table_name) {
@@ -147,7 +121,7 @@ SELECT azure_storage.blob_put
         , res)
 FROM (SELECT * FROM ${table_name}) AS res;
 `;
-    return queryTolkaDatabase(query);
+    return queryDatabase("tolka", query);
 }
 
 async function getAzureBlobUrl(blobName) {
