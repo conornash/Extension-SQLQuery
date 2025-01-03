@@ -19,7 +19,7 @@ console.info("Info");
 console.warn("Warning");
 console.error("Error");
 
-async function queryShannonDatabase(query) {
+async function queryDatabase(db_name, query) {
     const requestOptions = {
         method: 'POST',
         headers: {
@@ -28,7 +28,7 @@ async function queryShannonDatabase(query) {
         body: JSON.stringify({ query: query })
     };
 
-    const response = await fetch('/api/plugins/postgresql/shannon_sql_query', requestOptions);
+    const response = await fetch(`/api/plugins/postgresql/${db_name}_sql_query`, requestOptions);
     if (!response.ok) {
         throw new Error(`Failed to get query`);
     }
@@ -39,6 +39,10 @@ async function queryShannonDatabase(query) {
     }
 
     return data;
+}
+
+async function queryShannonDatabase(query) {
+    return queryDatabase("shannon", query);
 }
 
 async function queryTolkaDatabase(query) {
@@ -71,6 +75,24 @@ WHERE query_text @@ websearch_to_tsquery('${measure_search_term}')
 AND query_name @@ websearch_to_tsquery('${report_search_term}');
 `;
     return queryShannonDatabase(query);
+}
+
+async function logSillyTavernConversation(conversation_name, messages) {
+    const query = `INSERT INTO sillytavern_logging (conversation_name, updated_at, messages)
+VALUES(
+$$
+${conversation_name}
+$$
+, CURRENT_TIMESTAMP
+, $$
+${messages}
+$$)
+ON CONFLICT (conversation_name)
+DO UPDATE
+SET messages = EXCLUDED.messages
+, updated_at = CURRENT_TIMESTAMP
+`;
+    return queryDatabase("liffey", query);
 }
 
 async function getCreateTableAsDefinitions(table_name, recursive_depth) {
@@ -282,16 +304,6 @@ function registerFunctionTools() {
     }
 }
 
-const toConsole = (level, value)=>{
-    try {
-        const data = JSON.parse(value.toString());
-        console[level](`[/console-${level}]`, data);
-    } catch {
-        console[level](`[/console-${level}]`, value);
-    }
-    return '';
-};
-
 jQuery(async () => {
     if (extension_settings.sqlquery === undefined) {
         extension_settings.sqlquery = defaultSettings;
@@ -378,6 +390,34 @@ jQuery(async () => {
             return JSON.stringify(results.blob_url, null, 2);
         },
         returns: 'The URL of a signed Azure Blob',
+    }));
+
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'log-conversation',
+        helpString: 'Log the current conversation to Liffey',
+        returns: 'Nothing',
+        callback: async (args, value) => {
+            console.log(MODULE_NAME, "What up");
+            const conversation_name = value;
+            const messages = args.messages;
+            console.log(MODULE_NAME, conversation_name);
+            return await logSillyTavernConversation(conversation_name, messages);
+        },
+        unnamedArgumentList: [
+            SlashCommandArgument.fromProps({
+                description: 'Conversation name',
+                isRequired: true,
+                typeList: ARGUMENT_TYPE.STRING,
+            }),
+        ],
+        namedArgumentList: [
+            SlashCommandNamedArgument.fromProps({
+                name: 'messages',
+                description: 'These are the messages to log.',
+                isRequired: true,
+                typeList: [ARGUMENT_TYPE.STRING],
+            }),
+        ],
     }));
 
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
