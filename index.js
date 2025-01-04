@@ -46,7 +46,12 @@ async function findCandidateTableNames(measure_search_term, report_search_term) 
 , query_source
 FROM frc_sql_code
 WHERE query_text @@ websearch_to_tsquery('${measure_search_term}')
-AND query_name @@ websearch_to_tsquery('${report_search_term}');
+AND query_name @@ websearch_to_tsquery('${report_search_term}')
+AND query_name NOT LIKE 'rpt__%'
+AND query_name NOT LIKE '%_docmodel_%'
+AND query_name NOT LIKE 'f%'
+AND query_name NOT LIKE '%permissions'
+;
 `;
     return queryDatabase("shannon", query);
 }
@@ -206,7 +211,7 @@ function registerFunctionTools() {
                 if (!args) throw new Error('No arguments provided');
                 const query = args.query;
                 const params = args.args || [];
-                const results = await queryShannonDatabase(query, params);
+                const results = await queryDatabase("shannon", query);
                 return results;
             },
             formatMessage: (args) => args?.query ? `Executing SQL query...` : '',
@@ -408,7 +413,7 @@ jQuery(async () => {
             const query = value;
             console.log(MODULE_NAME, query);
             const params = args.args || [];
-            const results = await queryShannonDatabase(query, params);
+            const results = await queryDatabase("shannon", query);
             return JSON.stringify(results, null, 2);
         },
         returns: 'a JSON with the result of the SQL query execution',
