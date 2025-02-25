@@ -56,6 +56,93 @@ AND query_name NOT LIKE '%permissions'
     return queryDatabase("shannon", query);
 }
 
+async function grepSQLCode(search_term) {
+    const query = `
+WITH gc AS (
+SELECT query_name
+, query_text
+, ts_rank(to_tsvector(query_name || ' ' || query_text), s) AS ts_rank_score
+FROM frc_sql_code, websearch_to_tsquery('${search_term}') s
+WHERE query_name NOT LIKE '%_docmodel_%'
+AND query_name NOT LIKE '%permissions'
+AND query_name NOT LIKE 'agitator__%'
+AND query_name NOT LIKE 'bioreactor__%'
+AND query_name NOT LIKE 'f%'
+AND query_name NOT LIKE 'media__%'
+AND query_name NOT LIKE 'rpt__%'
+AND query_source NOT IN ('Documentation')
+)
+SELECT *
+FROM gc
+ORDER BY ts_rank_score DESC
+LIMIT 3;
+`;
+    return queryDatabase("shannon", query);
+}
+
+async function searchKnowledgeBase(search_term) {
+    const query = `
+WITH bc AS (
+SELECT title as named
+, 'clickup_content' AS source_table
+, full_content AS content
+, ts_rank(to_tsvector(full_content), s) as ts_rank_score
+, ts_rank_cd(to_tsvector(full_content), s) as ts_rank_cd_score
+FROM clickup_content, websearch_to_tsquery('${search_term}') s
+WHERE title NOT LIKE '%MN%'
+), st AS (
+SELECT conversation_name AS named
+, 'sillytavern_logging' AS source_table
+, messages AS content
+, ts_rank(to_tsvector(conversation_name || ' ' || messages), s) as ts_rank_score
+, ts_rank_cd(to_tsvector(conversation_name || ' ' || messages), s) as ts_rank_cd_score
+FROM sillytavern_logging, websearch_to_tsquery('${search_term}') s
+WHERE conversation_grade
+), md AS (
+SELECT query_name AS named
+, 'frc_sql_code' AS source_table
+, query_text AS content
+, ts_rank(to_tsvector(query_name || ' ' || query_text), s) as ts_rank_score
+, ts_rank_cd(to_tsvector(query_name || ' ' || query_text), s) as ts_rank_cd_score
+FROM frc_sql_code, websearch_to_tsquery('${search_term}') s
+WHERE query_source = 'Documentation'
+), gc AS (
+SELECT title AS named
+, 'frc_generated_content' AS source_table
+, full_content AS content
+, ts_rank(to_tsvector(full_content), s) as ts_rank_score
+, ts_rank_cd(to_tsvector(full_content), s) as ts_rank_cd_score
+FROM frc_generated_content, websearch_to_tsquery('${search_term}') s
+WHERE answered
+), unioned as (
+
+SELECT * FROM bc
+UNION ALL
+SELECT * FROM st
+UNION ALL
+SELECT * FROM md
+UNION ALL
+SELECT * FROM gc
+
+)
+
+SELECT *
+FROM unioned
+WHERE ts_rank_cd_score > 0.01
+ORDER BY ts_rank_cd_score DESC
+LIMIT 3
+
+UNION ALL
+
+SELECT *
+FROM unioned
+ORDER BY ts_rank_score DESC
+LIMIT 3
+;
+`;
+    return queryDatabase("shannon", query);
+}
+
 async function logSillyTavernConversation(conversation_name, messages) {
     const query = `INSERT INTO sillytavern_logging (conversation_name, updated_at, messages)
 VALUES(
@@ -70,6 +157,22 @@ ON CONFLICT (conversation_name)
 DO UPDATE
 SET messages = EXCLUDED.messages
 , updated_at = CURRENT_TIMESTAMP
+`;
+    return queryDatabase("liffey", query);
+}
+
+async function gradeSillyTavernConversation(conversation_name, grade) {
+    const query = `INSERT INTO sillytavern_logging (conversation_name, conversation_grade)
+VALUES(
+$$
+${conversation_name}
+$$
+, $$
+${grade}
+$$)
+ON CONFLICT (conversation_name)
+DO UPDATE
+SET conversation_grade = EXCLUDED.conversation_grade
 `;
     return queryDatabase("liffey", query);
 }
@@ -264,18 +367,68 @@ function registerFunctionTools() {
             required: ['measure_search_term', 'report_search_term'],
         });
 
+        // registerFunctionTool({
+        //     name: 'findCandidateTableNames',
+        //     displayName: 'Find Candidate Tables related to Measure and Report search terms',
+        //     description: 'Given a search term for both a measure and a report, this will return a list of potential source tables along with whether they are constructed in Airflow or Retool. Both search terms are parsed using the PostgreSQL function `websearch_to_tsquery`. If only one argument is provided, or an empty string is given for one argument, this will return an empty result.',
+        //     parameters: findCandidateTableNamesSchema,
+        //     action: async (args) => {
+        //         const measure_search_term = args.measure_search_term;
+        //         const report_search_term = args.report_search_term;
+        //         const results = await findCandidateTableNames(measure_search_term, report_search_term);
+        //         return results;
+        //     },
+        //     formatMessage: (args) => `Searching for tables that may contain ${args.measure_search_term} within a table responsible for ${args.report_search_term}...`,
+        // });
+
+        const grepSQLCodeSchema = Object.freeze({
+            $schema: 'http://json-schema.org/draft-04/schema#',
+            type: 'object',
+            properties: {
+                search_term: {
+                    type: 'string',
+                    description: 'A whole or partial name of what the measure being searched for may be labelled in a PostgreSQL database. Cannot be empty',
+                },
+            },
+            required: ['search_term'],
+        });
+
         registerFunctionTool({
-            name: 'findCandidateTableNames',
-            displayName: 'Find Candidate Tables related to Measure and Report search terms',
-            description: 'Given a search term for both a measure and a report, this will return a list of potential source tables along with whether they are constructed in Airflow or Retool. Both search terms are parsed using the PostgreSQL function `websearch_to_tsquery`. If only one argument is provided, or an empty string is given for one argument, this will return an empty result.',
-            parameters: findCandidateTableNamesSchema,
+            name: 'grepSQLCode',
+            displayName: 'Perform full-text search over SQL codebase',
+            description: 'Given a search term, this will return a list of DDL for SQL tables along with whether they are constructed in Airflow or Retool. The search term is parsed using the PostgreSQL function `websearch_to_tsquery`.',
+            parameters: grepSQLCodeSchema,
             action: async (args) => {
-                const measure_search_term = args.measure_search_term;
-                const report_search_term = args.report_search_term;
-                const results = await findCandidateTableNames(measure_search_term, report_search_term);
+                const search_term = args.search_term;
+                const results = await grepSQLCode(search_term);
                 return results;
             },
-            formatMessage: (args) => `Searching for tables that may contain ${args.measure_search_term} within a table responsible for ${args.report_search_term}...`,
+            formatMessage: (args) => `Searching for tables that may contain ${args.search_term}...`,
+        });
+
+        const searchKnowledgeBaseSchema = Object.freeze({
+            $schema: 'http://json-schema.org/draft-04/schema#',
+            type: 'object',
+            properties: {
+                search_term: {
+                    type: 'string',
+                    description: 'A full text query that will be used against the corpus of business documentation.',
+                },
+            },
+            required: ['search_term'],
+        });
+
+        registerFunctionTool({
+            name: 'searchKnowledgeBase',
+            displayName: 'Search the largest available corpus of text related to home visiting.',
+            description: 'Given a random inquiry, will pull from all known business documentation for relevant info.',
+            parameters: searchKnowledgeBaseSchema,
+            action: async (args) => {
+                const search_term = args.search_term;
+                const results = await searchKnowledgeBase(search_term);
+                return results;
+            },
+            formatMessage: (args) => `Searching for documentation that may contain ${args.search_term}...`,
         });
 
     } catch (err) {
@@ -394,6 +547,39 @@ jQuery(async () => {
                 name: 'messages',
                 description: 'These are the messages to log.',
                 isRequired: true,
+                typeList: [ARGUMENT_TYPE.STRING],
+            }),
+        ],
+    }));
+
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'grade-conversation',
+        helpString: 'Grades the current conversation as either good, bad, or unknown.',
+        returns: 'Nothing',
+        callback: async (args, value) => {
+            console.log(MODULE_NAME, "Grading conversation");
+            const conversation_name = value;
+            const grade = args.grade;
+            let bool_grade = grade;
+            if (grade == "good") { bool_grade = true; }
+            if (grade == "bad") { bool_grade = false; }
+            if (grade == "unknown") { bool_grade = null; }
+            console.log(MODULE_NAME, conversation_name);
+            return await gradeSillyTavernConversation(conversation_name, bool_grade);
+        },
+        unnamedArgumentList: [
+            SlashCommandArgument.fromProps({
+                description: 'Conversation name',
+                isRequired: true,
+                typeList: ARGUMENT_TYPE.STRING,
+            }),
+        ],
+        namedArgumentList: [
+            SlashCommandNamedArgument.fromProps({
+                description: 'This is one of three options for the grade',
+                enumList: ['good', 'bad', 'unknown'],
+                isRequired: true,
+                name: 'grade',
                 typeList: [ARGUMENT_TYPE.STRING],
             }),
         ],
